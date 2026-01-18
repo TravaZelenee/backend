@@ -1,14 +1,10 @@
-# etl/fill_labout_comes_by_sex.py
 """
-Заполняет метрики по
-Labour market outcomes of immigrants - Employment rates by educational attainment
-сайт: https://data-explorer.oecd.org/vis?lc=en&df[ds]=DisseminateFinalDMZ&df[id]=DSD_MIG%40DF_MIG_NUP_SEX&df[ag]=OECD.ELS.IMD&df[vs]=1.0&dq=..A.UNE_RATE%2BLF_RATE%2BEMP_WAP....&pd=2000%2C2024&to[TIME_PERIOD]=false
-файл: OECD.ELS.IMD,DSD_MIG@DF_MIG_NUP_SEX,1.0+..A.UNE_RATE+LF_RATE+EMP_WAP....
-
-Импорт данных OECD миграции в БД.
-Перед загрузкой — сопоставление стран с CountryModel.
+Скрипт для заполнения БД данными о средней месячной ЗП по полу и роду деятельности
+Скачал данные отсюда: https://rshiny.ilo.org/dataexplorer06/?lang=en&segment=indicator&id=EAR_4MTH_SEX_OCU_CUR_NB_A
+Файл в data: EAR_4MTH_SEX_OCU_CUR_NB_A-filtered-2025-11-20
 """
 
+import asyncio
 import csv
 from pathlib import Path
 from typing import Dict, List, Literal, cast
@@ -44,77 +40,52 @@ logger = setup_logger_to_file()
 # ============================================================
 # Укажи требуемые колонки в CSV файле
 REQUIRED_COLUMNS = {
-    "STRUCTURE",
-    "STRUCTURE_ID",
-    "STRUCTURE_NAME",
-    "ACTION",
-    "REF_AREA",
-    "Reference area",
-    "CITIZENSHIP",
-    "Citizenship",
-    "FREQ",
-    "Frequency of observation",
-    "MEASURE",
-    "Measure",
-    "SEX",
-    "Sex",
-    "BIRTH_PLACE",
-    "Place of birth",
-    "EDUCATION_LEV",
-    "Education level",
-    "UNIT_MEASURE",
-    "Unit of measure",
-    "TIME_PERIOD",
-    "Time period",
-    "OBS_VALUE",
-    "Observation value",
-    "OBS_STATUS",
-    "Observation status",
-    "UNIT_MULT",
-    "Unit multiplier",
-    "DECIMALS",
-    "Decimals",
+    "ref_area.label",
+    "source.label",
+    "indicator.label",
+    "sex.label",
+    "classif1.label",
+    "classif2.label",
+    "time",
+    "obs_value",
+    "obs_status.label",
+    "note_classif.label",
+    "note_indicator.label",
+    "note_source.label",
 }
 
-# Маппинг кодов в CSV -> список ISO Alpha-3
+# Маппинг кодов в CSV -> список
 COUNTRY_MAP = {
-    "EU27_2020": [
-        "AUT",
-        "BEL",
-        "BGR",
-        "HRV",
-        "CYP",
-        "CZE",
-        "DNK",
-        "EST",
-        "FIN",
-        "FRA",
-        "DEU",
-        "GRC",
-        "HUN",
-        "IRL",
-        "ITA",
-        "LVA",
-        "LTU",
-        "LUX",
-        "MLT",
-        "NLD",
-        "POL",
-        "PRT",
-        "ROU",
-        "SVK",
-        "SVN",
-        "ESP",
-        "SWE",
-    ],
-    "AUS": ["AUS"],
+    "Bolivia (Plurinational State of)": ["Bolivia"],
+    "Brunei Darussalam": ["Brunei"],
+    "Côte d'Ivoire": ["Ivory Coast"],
+    "Hong Kong, China": ["Hong Kong"],
+    "Lao People's Democratic Republic": ["Laos"],
+    "Macao, China": ["Macao"],
+    "Occupied Palestinian Territory": ["Palestine"],
+    "Republic of Korea": ["South Korea"],
+    "Republic of Moldova": ["Moldova"],
+    "Russian Federation": ["Russia"],
+    "Tanzania, United Republic of": ["Tanzania"],
+    "United Kingdom of Great Britain and Northern Ireland": ["Great Britain", "Ireland"],
+    "United States of America": ["USA"],
+    "Venezuela (Bolivarian Republic of)": ["Venezuela"],
+    "Viet Nam": ["Vietnam"],
+    "Marshall Islands": ["Marshall Islands"],
+    "Australia": ["Australia"],
+    "Bermuda": ["Bermuda"],
+    "Botswana": ["Botswana"],
+    "Bosnia and Herzegovina": ["Bosnia and Herzegovina"],
+    "Curaçao": ["Curaçao"],
+    "Congo": ["Congo Republic"],
+    "Congo, Democratic Republic of the": ["DR Congo"],
 }
 
 
 # ============================================================
 #                 ОСНОВНОЙ ИМПОРТ CAR
 # ============================================================
-async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 50):
+async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 50, delimiter: str = ","):
     """Импорт данных метрик из CSV в БД.
 
     Основная логика:
@@ -138,7 +109,7 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
     with open(file_path, encoding="utf-8") as f:
 
         # Читаем первую строку (заголовки) и чистим их
-        raw_header = f.readline().strip().split(",")
+        raw_header = f.readline().strip().split(delimiter)
         header = [col.strip().replace("\ufeff", "").replace('"', "").replace("'", "") for col in raw_header]
 
         # === Проверка заголовков ===
@@ -146,44 +117,42 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
 
         # Переходим в начало файла и создаём DictReader с чистыми заголовками
         f.seek(0)
-        reader = csv.DictReader(f, fieldnames=header)
+        reader = csv.DictReader(f, fieldnames=header, delimiter=delimiter)
         next(reader)  # пропускаем первую строку-заголовок (уже использована)
 
         # Прохожусь по строкам файла
         for row in reader:
 
             # --- Получаем список стран ---
-            country_from_file = row["REF_AREA"].strip()
-            country_iso_alpha3_codes = COUNTRY_MAP.get(country_from_file, [country_from_file])
+            country_from_file = row["ref_area.label"].strip()
+            list_country_name_eng = COUNTRY_MAP.get(country_from_file, [country_from_file])
 
             # Прохожусь по странам с особенностями
-            for country_code in country_iso_alpha3_codes:
+            for country_name_eng in list_country_name_eng:
 
                 # === Определяем страну ===
-                if country_code in country_cache:
-                    country_id = country_cache[country_code]
+                if country_name_eng in country_cache:
+                    country_id = country_cache[country_name_eng]
                 else:
-                    country_obj = await CountryModel.get(session, CountryGetDTO(iso_alpha_3=country_code))
+                    country_obj = await CountryModel.get(session, CountryGetDTO(name_eng=country_name_eng))
                     if not country_obj:
-                        logger.warning(f"⚠️ Страна '{country_code}' не найдена — пропуск.")
+                        logger.warning(f"⚠️ Страна '{country_name_eng}' не найдена — пропуск.")
                         continue
                     country_id = cast(int, country_obj.id)
-                    country_cache[country_code] = country_id
+                    country_cache[country_name_eng] = country_id
 
                 # === Создаю метрику: определяю основные поля и вызываю метод get_or_create_metric_cached ===
-                slug = row["STRUCTURE_NAME"].lower().replace(" ", "_").strip()
+                slug = row["indicator.label"].lower().replace(" ", "_").strip()
                 unique_key_metric = slug
-                name = row["STRUCTURE_NAME"]
-                description = row["STRUCTURE_NAME"]
+                name = row["indicator.label"]
+                description = None
                 category = CategoryMetricEnum.ECONOMY
-                source_name = "OECD Data Explorer"
-                source_url = "https://data-explorer.oecd.org/vis?lc=en&df[ds]=DisseminateFinalDMZ&df[id]=DSD_MIG%40DF_MIG_NUP_SEX&df[ag]=OECD.ELS.IMD&df[vs]=1.0&dq=..A.UNE_RATE%2BLF_RATE%2BEMP_WAP....&pd=2000%2C2024&to[TIME_PERIOD]=false"
+                source_name = "ILOSTAT"
+                source_url = (
+                    "https://rshiny.ilo.org/dataexplorer06/?lang=en&segment=indicator&id=EAR_4MTH_SEX_OCU_CUR_NB_A"
+                )
                 type_data = TypeDataEnum.FLOAT
-                add_info = {
-                    "citizenship": row["Citizenship"],
-                    "frequency_of_observation": row["Frequency of observation"],
-                    "education_level": row["Education level"],
-                }
+                add_info = None
 
                 metric = await get_or_create_metric_cached(
                     cache=metric_cache,
@@ -201,18 +170,25 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
                 metric_id = cast(int, metric.id)
 
                 # === Создаю серию: определяю основные поля и вызываю метод get_or_create_series_cached ===
-                gender = row["Sex"]
-                unit = row["Unit multiplier"].lower().strip()
-                place_of_birth = row["Place of birth"].lower().strip()
-                unit_of_measure = row["Unit of measure"]
-                measure = row["Measure"]
-                unique_key_series = f"{metric_id} {gender} {unit} {place_of_birth} {unit_of_measure} {measure}"
+                gender = row["sex.label"]
+                unit = row["classif2.label"].strip()
+                profession = row["classif1.label"].strip()
+                source = row["source.label"].strip()
+                obs_status = row["obs_status.label"].strip()
+                note_indicator = row["note_indicator.label"].strip()
+                note_source = row["note_source.label"].strip()
+
+                unique_key_series = (
+                    f"{metric_id} {unit} {gender} {profession} {source} {obs_status} {note_indicator} {note_source}"
+                )
                 add_info = {
                     "unit": unit,
                     "gender": gender,
-                    "place_of_birth": place_of_birth,
-                    "unit_of_measure": unit_of_measure,
-                    "measure": measure,
+                    "profession": profession,
+                    "source": source,
+                    "obs_status": obs_status,
+                    "note_indicator": note_indicator,
+                    "note_source": note_source,
                 }
 
                 series = await get_or_create_series_cached(
@@ -225,7 +201,7 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
                 series_id = cast(int, series.id)
 
                 # === Создаю период: определяю основные поля и вызываю метод get_or_create_period_cached ===
-                year = int(row["TIME_PERIOD"])
+                year = int(row["time"])
                 period_type = PeriodTypeEnum.YEARLY
                 unique_key_period = f"{metric_id}_{series_id}_{year}"
 
@@ -241,7 +217,7 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
 
                 # === Создаю значение для метрики ===
                 try:
-                    value = float(row["OBS_VALUE"].strip()) if row["OBS_VALUE"].strip() else None
+                    value = float(row["obs_value"].strip().replace(",", ".")) if row["obs_value"].strip() else None
                 except ValueError:
                     logger.warning(f"⚠️ Некорректное значение obs_value: {row['obs_value']}")
                     continue
@@ -264,7 +240,7 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
                     session.add_all(buffer)
                     await session.commit()
                     total_inserted += len(buffer)
-                    # logger.info(f"💾 Массовая загрузка — {total_inserted} записей")
+                    logger.info(f"💾 Массовая загрузка — {total_inserted} записей")
                     buffer.clear()
 
     # Финальный commit оставшихся записей
@@ -272,7 +248,7 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
         session.add_all(buffer)
         await session.commit()
         total_inserted += len(buffer)
-        # logger.info(f"💾 Финальный commit — {total_inserted} записей")
+        logger.info(f"💾 Финальный commit — {total_inserted} записей")
 
     logger.info(f"\n✅ Импорт завершён. Всего добавлено: {total_inserted} записей.")
 
@@ -280,19 +256,20 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
 # ================= Main =================
 async def main(mode: Literal["check", "import"]):
 
-    file_path = Path("data/OECD.ELS.IMD,DSD_MIG@DF_MIG_NUP_SEX,1.0+..A.UNE_RATE+LF_RATE+EMP_WAP.....csv")
+    file_path = Path("data/EAR_4MTH_SEX_OCU_CUR_NB_A-filtered-2025-11-20-2.csv")
 
     async with AsyncSessionLocal() as session:
         if mode == "check":
-            df = pd.read_csv(file_path)
-            values = df["REF_AREA"].tolist()
+            df = pd.read_csv(file_path, sep=",")
+            values = df["ref_area.label"].tolist()
             await compare_country_list_by_column(
                 session=session,
                 list_string=values,
-                column_name="iso_alpha_3",
+                column_name="name_eng",
+                country_map=COUNTRY_MAP,
             )
             return
 
         elif mode == "import":
-            await import_csv(session=session, file_path=file_path)
+            await import_csv(session=session, file_path=file_path, batch_size=100, delimiter=";")
             return

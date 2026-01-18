@@ -44,71 +44,13 @@ logger = setup_logger_to_file()
 # ============================================================
 # Укажи требуемые колонки в CSV файле
 REQUIRED_COLUMNS = {
-    "STRUCTURE",
-    "STRUCTURE_ID",
-    "STRUCTURE_NAME",
-    "ACTION",
-    "REF_AREA",
-    "Reference area",
-    "CITIZENSHIP",
-    "Citizenship",
-    "FREQ",
-    "Frequency of observation",
-    "MEASURE",
-    "Measure",
-    "SEX",
-    "Sex",
-    "BIRTH_PLACE",
-    "Place of birth",
-    "EDUCATION_LEV",
-    "Education level",
-    "UNIT_MEASURE",
-    "Unit of measure",
-    "TIME_PERIOD",
-    "Time period",
-    "OBS_VALUE",
-    "Observation value",
-    "OBS_STATUS",
-    "Observation status",
-    "UNIT_MULT",
-    "Unit multiplier",
-    "DECIMALS",
-    "Decimals",
+    "Entity",
+    "Code",
+    "Year",
 }
 
 # Маппинг кодов в CSV -> список ISO Alpha-3
-COUNTRY_MAP = {
-    "EU27_2020": [
-        "AUT",
-        "BEL",
-        "BGR",
-        "HRV",
-        "CYP",
-        "CZE",
-        "DNK",
-        "EST",
-        "FIN",
-        "FRA",
-        "DEU",
-        "GRC",
-        "HUN",
-        "IRL",
-        "ITA",
-        "LVA",
-        "LTU",
-        "LUX",
-        "MLT",
-        "NLD",
-        "POL",
-        "PRT",
-        "ROU",
-        "SVK",
-        "SVN",
-        "ESP",
-        "SWE",
-    ],
-    "AUS": ["AUS"],
-}
+COUNTRY_MAP = {}
 
 
 # ============================================================
@@ -280,12 +222,12 @@ async def import_csv(session: AsyncSession, file_path: Path, batch_size: int = 5
 # ================= Main =================
 async def main(mode: Literal["check", "import"]):
 
-    file_path = Path("data/OECD.ELS.IMD,DSD_MIG@DF_MIG_NUP_SEX,1.0+..A.UNE_RATE+LF_RATE+EMP_WAP.....csv")
+    file_path = Path("data/monthly-average-surface-temperatures-by-year.csv")
 
     async with AsyncSessionLocal() as session:
         if mode == "check":
             df = pd.read_csv(file_path)
-            values = df["REF_AREA"].tolist()
+            values = df["Code"].tolist()
             await compare_country_list_by_column(
                 session=session,
                 list_string=values,
